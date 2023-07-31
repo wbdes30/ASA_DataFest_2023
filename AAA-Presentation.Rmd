@@ -1,0 +1,361 @@
+---
+title: "AAA Presentation"
+author: "AAA-DataFest2023"
+date: "2023-04-23"
+output: slidy_presentation
+---
+
+```{r setup, include=FALSE,  message=FALSE, fig.width=7, fig.height=5}
+knitr::opts_chunk$set(echo = FALSE)
+library(wordcloud)
+library(reshape2)
+library(RColorBrewer)
+library(textdata)
+library(tidyverse)
+library(tidyr)
+library(janitor)
+library(ggplot2)
+library(ggrepel)
+library(janeaustenr)
+library(dplyr)
+library(tidytext)
+library(zoo)
+library(stringr)
+library(ggpubr)
+library(webr)
+library(tidyselect)
+```
+
+```{r readfiles, echo = FALSE,  message=FALSE, fig.width=7, fig.height=5}
+attorneys <- read.csv("data/attorneys.csv")
+attorneytimeentries <- read.csv("data/attorneytimeentries.csv")
+categories <- read.csv("data/categories.csv")
+clients <- read.csv("data/clients.csv")
+questionposts <- read.csv("data/questionposts.csv")
+questions <- read.csv("data/questions.csv")
+statesites <- read.csv("data/statesites.csv")
+subcategories <- read.csv("data/subcategories.csv")
+ATE <- read_csv("data/attorneytimeentries.csv")
+joinclientstate <- read_csv("data/joinclientstate.csv")
+```
+
+## States' Number of Questions by Categories
+
+```{r state_category_question, echo = FALSE, message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+a1 <- categories %>% group_by("StateAbbr")
+
+a2 <- subcategories %>% group_by("StateAbbr")
+
+questions_plot <- tabyl(questions, StateAbbr, Category)
+
+question_plot <- questions_plot %>% pivot_longer(cols = c('Consumer Financial Questions', 'Education', 'Family and Children', 'Health and Disability', 'Housing and Homelessness', 'Income Maintenance', 'Individual Rights', 'Juvenile','Work, Employment and Unemployment', 'Other'), names_to = "Category", values_to = "Number of Questions")
+
+highlight_df <- question_plot %>% group_by(Category) %>%
+  filter(`Number of Questions` >= (max(`Number of Questions`)/2.5))
+
+category_state_question <- question_plot %>%
+  ggplot(aes(x = StateAbbr, y = `Number of Questions`)) +
+  geom_point(alpha = 0.3, color = "purple") +
+  geom_point(data=highlight_df,
+             aes(x=StateAbbr,y=`Number of Questions`),
+             alpha = 0.3,
+             color='red') +
+  geom_label_repel(data = highlight_df,
+                   aes(x=StateAbbr,y=`Number of Questions`),
+                   label = highlight_df$StateAbbr) +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank()) +
+  ggtitle("States' Number of Questions by Categories")+
+  xlab("State Abbreviation")+
+  theme(plot.title=element_text(size=20),
+        axis.title=element_text(size=18)) +
+  facet_wrap(~Category, scales = "free")
+
+category_state_question
+
+```
+## Negative Wordcloud
+
+```{r wordcloud, echo = FALSE,  message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+questionposts$PostText <- questionposts$PostText %>%
+  str_trim() %>%
+  str_squish()
+
+tidy_questionposts <- tibble(text = questionposts$PostText) %>% unnest_tokens(word, text)
+cleaned_questionposts <- tidy_questionposts %>%
+  anti_join(get_stopwords())
+stopwords_questionposts <- cleaned_questionposts %>% count(word, sort = TRUE)
+
+positive <- get_sentiments("bing") %>%
+  # for general purposes, tidytext
+  # also comes with AFINN & nrc
+  filter(sentiment == "positive")
+
+bing <- get_sentiments("bing")
+
+wordcloud_tidy <- tidy_questionposts %>%
+  inner_join(bing, by = join_by(word), keep = FALSE) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  filter(n > 100, sentiment == "negative") %>%
+  with(wordcloud(word, n,
+            max.words=500,
+            colors=brewer.pal(8, "Dark2")))
+
+wordcloud_tidy
+```
+## Quarterly Attorney Time Entries
+```{r quarter, echo = FALSE,  message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+date <- as.POSIXct(ATE$EnteredOnUtc, format = "%m-%d-%Y %H:%M:%S")
+
+Time <- format(date, format = "%H:%M:%S")
+
+Date <- format(date, format = "%m-%d-%Y")
+
+Dt <- as.Date(Date, format("%m-%d-%Y"))
+
+timedate <- ATE %>%
+  select(-EnteredOnUtc) %>%
+  data.frame(Time, Date)
+
+#quarter
+Quarter <- as.yearqtr(timedate$Date, format = "%m-%d-%Y")
+
+#year+quarter
+quar <- timedate %>%
+  select(-Date) %>%
+  data.frame(Quarter) %>%
+  arrange(Quarter)
+
+Total <- quar %>%
+  select(Quarter, Hours) %>%
+  group_by(Quarter)  %>%
+  summarise(Hours = sum(Hours)) %>%
+  filter(Quarter >= '2016 Q1')
+
+
+freq <- data.frame(table(quar$Quarter)) %>%
+  slice_tail(n=-13) %>%
+  select(Freq)
+
+
+entries <- data.frame(Total,
+                     Frequency = freq) %>%
+  slice_head(n = -1)
+
+
+entries %>%
+  ggplot() +
+  
+  ##plot freq
+  geom_bar(aes(x=Quarter, y = Freq, fill = "#FDFD96"), color = "#FFB347",
+           stat = "identity") +
+  
+  ##plot hours
+  geom_line(aes(x=Quarter, y=Hours, color = "red"),
+            stat = "identity", size = 1.1) +
+  
+  ##Add 2nd y-axis
+  scale_y_continuous(sec.axis=sec_axis(~.*1, name="Hours")) +
+  
+  ##Legends
+  scale_fill_manual(name = NULL, labels = c("Freq"),
+                    values = c("#FDFD96")) +
+  scale_color_manual(name = NULL, labels = c("Hours"), values = c("red")) +
+  
+  ##label
+  labs(title = "Quarterly Attorney Entries Trend from 2016 to 2021")
+
+```
+
+## Attorneys's entries VS Customers's posts time distribution
+```{r entriesposts, echo = FALSE,  message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+
+questions <- read_csv("data/questions.csv")
+
+#year and quarter separately
+TimeOnly <- ATE %>%
+  select(-EnteredOnUtc) %>%
+  data.frame(Time)
+
+
+date1 <- as.POSIXct(questions$AskedOnUtc, format = "%d/%m/%Y %H:%M:%S")
+
+Time1 <- format(date1, format = "%H")
+
+Time2 <- format(date, format = "%H")
+
+T1 <- data.frame(table(Time1))
+
+Cus <- data.frame(Time = T1$Time1,
+           Customers = T1$Freq)
+
+T2 <- data.frame(table(Time2))
+                         
+CusAtt <- data.frame(Cus, Attorneys = T2$Freq)
+
+CusAtt %>% ggplot(aes(x = Time)) +
+  geom_col(aes(y = Customers, fill = "#FFA9A9"), color = "#FFB347" ) + 
+  geom_col(aes(y= Attorneys, fill = "#FFB347")) +
+  scale_fill_manual(name = NULL, labels = c("Customers", "Attorneys"),
+                    values = c("#FFA9A9", "#FDFD96")) +
+  labs(title = "Attorneys's entries VS Customers's posts time distribution")
+```
+
+## Number of questions per category from 2016-2022
+```{r questionsasktotal, echo = FALSE,  message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+Yr <- as.numeric(format(date1, format = "%Y"))
+
+Tb <- data.frame(Category = questions$Category, Year = Yr) %>%
+  table() %>%
+  data.frame() %>%
+  filter(Year != 2012) %>%
+  filter(Year != 2013)  %>%
+  filter(Year != 2014)  %>%
+  filter(Year != 2015) 
+
+Tb %>% ggplot(aes(Category, Year, fill= Freq)) + 
+  geom_tile() +
+  geom_text(aes(label = Freq)) +
+  theme(text = element_text(size = 12)) + 
+  scale_fill_gradient2(low="lightyellow", mid="orange", high="red", #colors in the scale
+                       midpoint = 10000,
+                       breaks = seq(0, 20000, 10000)) +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) +
+  labs(title = "Number of questions per category from 2016-2022")
+```
+
+## Customer Service 2016 - 2022 In Total
+```{r totalcustomerservice, echo = FALSE,  message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+Late = 7
+
+OnTime = 61
+
+Unanswered = 32
+
+Serv <- data.frame(Late, OnTime, Unanswered)
+
+Service <- data.frame(Percentage = t(Serv))
+
+Service$Service <- rownames(Service)
+
+ggplot(Service, aes(x="", y = Percentage, fill = Service)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y") +
+  scale_fill_manual(values=c("#FFB347", "#FDFD96", "#FF6961")) +
+  labs(title = "Customer Service 2016 - 2022 In Total")
+```
+
+## Customer Service Per Year in 2016 - 2022
+```{r yearcustomerservice, echo = FALSE,  message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+Dl2 <- read_csv("data/Dl2.csv")
+
+Dl <- Dl2 %>%
+  select(Year, Late, OnTime, Unanswered...4) %>%
+  filter(Year != 'NA')
+
+names(Dl)[4] <- "Unanswered"
+
+Deadline1 <- Dl %>% 
+  pivot_longer(-Year, names_to = "Service", values_to = "Value") %>%
+  filter(Year != 2022)
+
+Deadline1$Value <- as.numeric(sub("%", "", Deadline1$Value,fixed=TRUE))/100
+
+
+Deadline1 %>% ggplot(aes(x = "", y = Value, fill = Service)) + 
+  geom_bar(stat = "identity", width = 1,  position = position_fill()) +
+  coord_polar(theta="y", start = 0) +
+  facet_wrap(~ Year) +
+  guides(fill=guide_legend(nrow=3)) +
+  theme(text = element_text(size = 7),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  scale_fill_manual(values=c("#FFB347", "#FDFD96", "#FF6961")) +
+  geom_text(aes(label = Value*100), position = position_fill(vjust = 0.5),
+            size=2) +
+  labs(title = "Customer Service Per Year in 2016-2022")
+```
+
+## Diversity in Category and Subcategory
+```{r diversity, echo = FALSE,  message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+CS <- questions %>% 
+  select(Category, Subcategory) %>%
+  table() %>%
+  data.frame() %>%
+  filter(Freq!=0)
+
+CS %>% ggplot(aes(Category, Subcategory, fill= Freq)) + 
+  geom_tile() +
+  theme(axis.text.x = element_text(size = 6),
+        axis.text.y = element_text(size = 1)) +
+  scale_fill_gradient2(low="lightyellow", mid="orange", high="red", 
+                       #colors in the scale
+                       midpoint = 10000,
+                       breaks = seq(0, 35000, 7000)) +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 5)) +
+  labs(title = "Diversity in category and subcategory")
+```
+
+## Customer Finance Analyse
+```{r customersfinance, echo = FALSE,  message=FALSE, fig.align = 'left', fig.width=14, fig.height=8}
+
+Assets <- joinclientstate %>%
+  select(CheckingBalance, SavingsBalance, InvestmentsBalance) %>%
+  replace(.== "NULL", NA) %>%
+  data.frame()
+
+Assets$CheckingBalance <- as.numeric(Assets$CheckingBalance)
+
+Assets$SavingsBalance <- as.numeric(Assets$SavingsBalance)
+
+Assets$InvestmentsBalance <- as.numeric(Assets$InvestmentsBalance)
+
+Assets$Total <- rowSums(Assets, na.rm= TRUE)
+
+AssetsCheck <- data.frame(Total = Assets$Total, 
+                          Allowed = joinclientstate$AllowedAssets)
+
+AssetsCheck[is.na(AssetsCheck)] <- 0
+
+AssetsQualified <- AssetsCheck %>%
+  mutate(Check = case_when(Total > Allowed ~ FALSE,
+                           Total <= Allowed ~ TRUE))
+
+
+####Income Check####
+
+Income <- joinclientstate %>%
+  select(AnnualIncome, AllowedIncome) %>%
+  replace(.=="NULL", NA)
+
+Income$AnnualIncome <- as.numeric(Income$AnnualIncome)
+
+Income$AllowedIncome <- as.numeric(Income$AllowedIncome)
+
+Income[is.na(Income)] <- 0
+
+IncomeCheck <- Income %>%
+  mutate(CheckIncome = case_when(AnnualIncome > AllowedIncome ~ FALSE,
+                           AnnualIncome <= AllowedIncome ~ TRUE))
+
+Qualified <- data.frame(Income = IncomeCheck$CheckIncome, 
+                         Assets = AssetsQualified$Check)
+  
+Final <- Qualified %>% 
+  mutate(Qualified = case_when(Income == FALSE ~ "No",
+                               Assets == FALSE ~ "No"))
+
+Final[is.na(Final)] <- "Yes"
+
+#### Final Qualification ####
+
+table(Final$Qualified) %>%
+  data.frame() %>%
+  ggplot(aes(x="", y = Freq, fill = Var1)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y") +
+  scale_fill_manual(values=c("#FF6961", "#FDFD96")) +
+  labs(title = "Customer Finance Qualification")
+```
+
+
+
